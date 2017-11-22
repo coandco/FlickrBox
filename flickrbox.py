@@ -205,7 +205,7 @@ class Flickrbox:
     def poll_upload_tickets(self):
         """
         Checks the upload status of all uploading tickets.
-        Once complete, adds the photo to it's repsective photoset
+        Once complete, adds the photo to its respective photoset
         """
         while self._syncing:
             tickets = flickr.Photo.checkUploadTickets(

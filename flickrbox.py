@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 import logging
 import _thread
+import re
 
 import flickr_api as flickr
 from watchdog.observers import Observer
@@ -15,6 +16,59 @@ import watchdog.events
 flickr.enable_cache()
 
 logging.basicConfig(format='- %(message)s', level=logging.DEBUG)
+
+if os.name == 'nt':
+    CHARMAP = [("%",  "^{25}"),
+               ("&",  "^{26}"),
+               ("*",  "^{2A}"),
+               ("\\", "^{5C}"),
+               (":",  "^{3A}"),
+               ("<",  "^{3C}"),
+               (">",  "^{3E}"),
+               ("?",  "^{3F}"),
+               ("/",  "^{2F}"),
+               ("|",  "^{7C}"),
+               ("\"", "^{22}"),
+               (".",  "^{2E}"),
+               (" ",  "^{20}")]
+    # We don't want to replace period or space when escaping for Windows, except
+    # when handling the end-of-string special case
+    ESCAPE_DICT = {x[0]: x[1] for x in CHARMAP if x[0] not in (".", " ")}
+    UNESCAPE_DICT = {x[1]: x[0] for x in CHARMAP}
+else:
+    CHARMAP = [("/",  "^{2F}")]
+    ESCAPE_DICT = {x[0]: x[1] for x in CHARMAP}
+    UNESCAPE_DICT = {x[1]: x[0] for x in CHARMAP}
+
+
+
+
+def multireplace(string, replacements):
+    # Place longer ones first, to keep shorter substrings from matching where the longer ones should take place.
+    # For instance, given the replacements {'ab': 'AB', 'abc': 'ABC'} against the string 'hey abc', it should produce
+    # 'hey ABC' and not 'hey ABc'.
+    substrs = sorted(replacements, key=len, reverse=True)
+
+    # Create a big OR regex that matches any of the substrings to replace
+    regexp = re.compile('|'.join(map(re.escape, substrs)))
+
+    # For each match, look up the new string in the replacements
+    return regexp.sub(lambda match: replacements[match.group(0)], string)
+
+
+def escape_filename(string):
+    if os.name == 'nt':
+        # Windows also disallows periods or spaces at the end of folders or filenames
+        if string.endswith('.'):
+            string = "%s%s" % (escaped_string[:-1], "^{2E}")
+        elif string.endswith(' '):
+            string = "%s%s" % (escaped_string[:-1], "^{20}")
+
+    return multireplace(string, ESCAPE_DICT)
+
+
+def unescape_filename(string):
+    return multireplace(string, UNESCAPE_DICT)
 
 
 class Flickrbox:
@@ -83,7 +137,7 @@ class Flickrbox:
 
         logging.info("Syncing Flickr library...")
         local = {
-            d: os.listdir(self.get_path(d))
+            unescape_filename(d): os.listdir(self.get_path(d))
             for d in os.listdir(self.path)
             if os.path.isdir(self.get_path(d))
         }
@@ -112,7 +166,7 @@ class Flickrbox:
                 local[photoset_title].append(photo.title)
 
             for photo in local[photoset[0]]:
-                photo_parsed = os.path.splitext(photo)
+                photo_parsed = os.path.splitext(unescape_filename(photo))
                 if photo_parsed[0] in remote_photos or photo_parsed[0] == ".DS_Store":
                     continue
 
@@ -124,7 +178,7 @@ class Flickrbox:
                 continue
 
             for photo in photoset[1]:
-                photo_parsed = os.path.splitext(photo)
+                photo_parsed = os.path.splitext(unescape_filename(photo))
                 if photo_parsed[0] == ".DS_Store":
                     continue
                 self.upload_photo(
@@ -260,7 +314,8 @@ class Flickrbox:
         """
         Returns the absolute path based on given arguments
         """
-        return os.path.join(self.path, photoset_title, "%s%s" % (photo_title, file_ext))
+        return os.path.join(self.path, escape_filename(photoset_title),
+                            "%s%s" % (escape_filename(photo_title), file_ext))
 
 
 class FlickrboxEventHandler(watchdog.events.FileSystemEventHandler):
@@ -304,7 +359,7 @@ class FlickrboxEventHandler(watchdog.events.FileSystemEventHandler):
         """
         Returns a dictionary containing the photoset title and photo title of a given filepath
         """
-        parsed = file_path.split(os.sep)
+        parsed = unescape_filename(file_path).split(os.sep)
         photo_parsed = os.path.splitext(parsed[-1])
         return {
             "photoset": parsed[-2],
